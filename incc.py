@@ -4,7 +4,7 @@ import getopt
 import os
 import sys
 import threading
-from typing import List
+from typing import List, Set
 import clang.cindex as CX
 
 if os.path.exists("""C:\\Program Files\\LLVM\\bin\\libclang.dll"""):
@@ -12,6 +12,7 @@ if os.path.exists("""C:\\Program Files\\LLVM\\bin\\libclang.dll"""):
 
 opts, args = getopt.getopt(sys.argv[1:], "", ["compile-commands=", "result="])
 res_path = "result.txt"
+path = "./"
 for opt in opts:
     if "--compile-commands" in opt:
         path = opt[1]
@@ -19,29 +20,37 @@ for opt in opts:
         res_path = opt[1]
 
 cdb: CX.CompilationDatabase = CX.CompilationDatabase.fromDirectory(path)
-incs = set()
+incs: Set[str] = set()
 threads: List[threading.Thread] = []
+lock = threading.Lock()
 for i in cdb.getAllCompileCommands():
-    print(i.filename)
+    print(i.filename, "loaded")
     args = []
     for arg in i.arguments:
         if arg != i.filename:
             args.append(arg)
-    index = CX.Index.create()
 
-    def parse(filename, args):
+    def parse(filename, args, lock):
+        index = CX.Index.create()
+        local_data = threading.local()
+        local_data.incs = set()
         try:
             tu = index.parse(path + filename, args)
             for inc in tu.get_includes():
                 file: str = str(inc.location.file)
                 if "include\mc" in file:
                     name = file[file.find("include\mc") + 8 :]
-                    incs.add(name)
+                    local_data.incs.add(name)
         except Exception as e:
-            print(filename, e)
+            print(e)
+        with lock:
+            for i in local_data.incs:
+                incs.add(i)
         print(filename, "finished")
 
-    threads.append(threading.Thread(target=parse, args=(i.filename, args)))
+    threads.append(threading.Thread(target=parse, args=(i.filename, args, lock)))
+    while threading.active_count() > 12:
+        pass
     threads[-1].start()
 
 for i in threads:
